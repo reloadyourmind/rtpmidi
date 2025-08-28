@@ -10,17 +10,21 @@ log() { logger -t midi-autoconnect "$1"; }
 
 log "Сервис midi-autoconnect запущен"
 
-# Функция проверки подключения
+# Проверка, существует ли соединение src -> dst (по выводу aconnect -l)
 is_connected() {
-    local src=$1
-    echo "Port 1:" $1
-    local dst=$2
-    echo "Port 2:" $2
-    echo aconnect -l | awk -v s="$src" -v d="$dst" '
+    local src="$1"
+    local dst="$2"
+    aconnect -l | awk -v s="$src" -v d="$dst" '
         /^client/ {c=$2; sub(":","",c)}
-        /^[[:space:]]+[0-9]+/ {p=$1; owner=c ":" p}
-        /Connecting To:/ {if(owner==s){for(i=3;i<=NF;i++) if($i==d) exit 0}}
-        END {exit 1}
+        /^[[:space:]]+[0-9]+/ {
+            p=$1; owner=c ":" p; in_owner=(owner==s)
+        }
+        /Connecting To:/ {
+            if (in_owner) {
+                for (i=3; i<=NF; i++) if ($i==d) exit 0
+            }
+        }
+        END { exit 1 }
     '
 }
 
@@ -29,7 +33,7 @@ while true; do
     RTP_CLIENT=$(aconnect -l | awk -v name="$RTP_NAME" '/^client/ {c=$2; sub(":","",c); if(index($0,name)){print c; exit}}')
     if [ -z "$RTP_CLIENT" ]; then
         log "RTP клиент $RTP_NAME не найден"
-        sleep $SLEEP
+        sleep "$SLEEP"
         continue
     fi
     DST="$RTP_CLIENT:$RTP_PORT"
@@ -43,13 +47,19 @@ while true; do
         '); do
             SRC="$client:$port"
 
-            # Подключаем только если ещё нет
+            # Соединение устройство -> RTP
             if ! is_connected "$SRC" "$DST"; then
                 log "Подключаю $SRC -> $DST"
-                aconnect "$SRC" "$DST" 2>/dev/null || log "Ошибка $SRC -> $DST"
+                aconnect "$SRC" "$DST" 2>/dev/null || log "Ошибка подключения $SRC -> $DST"
+            fi
+
+            # Соединение RTP -> устройство (для обратного направления)
+            if ! is_connected "$DST" "$SRC"; then
+                log "Подключаю $DST -> $SRC"
+                aconnect "$DST" "$SRC" 2>/dev/null || log "Ошибка подключения $DST -> $SRC"
             fi
         done
     done
 
-    sleep $SLEEP
+    sleep "$SLEEP"
 done
